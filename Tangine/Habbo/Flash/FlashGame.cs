@@ -19,11 +19,11 @@ public class FlashGame : HGame
     private readonly Dictionary<uint, FlashMessage> _flashMessagesByHash;
     private readonly Dictionary<string, FlashMessage> _flashMessagesByClassName;
 
-    private ASCode _scSendCode, _scSendUnencryptedCode;
-    private ASMethod _scSendMethod, _scSendUnencryptedMethod;
+    private ASCode? _scSendCode, _scSendUnencryptedCode;
+    private ASMethod? _scSendMethod, _scSendUnencryptedMethod;
 
-    private ASMethod _hcmNextPortMethod, _hcmUpdateHostParametersMethod;
-    private ASInstance _socketConnectionInstance, _habboCommunicationDemoInstance, _habboCommunicationManagerInstance;
+    private ASMethod? _hcmNextPortMethod, _hcmUpdateHostParametersMethod;
+    private ASInstance? _socketConnectionInstance, _habboCommunicationDemoInstance, _habboCommunicationManagerInstance;
 
     public FlashGame(string path)
         : this(new ShockwaveFlash(path), path)
@@ -52,6 +52,7 @@ public class FlashGame : HGame
         GamePatches.DisableHostChecks => DisableHostChecks(),
         GamePatches.DisableEncryption => DisableEncryption(),
         GamePatches.InjectEndPointShouter => InjectEndPointShouter(),
+        GamePatches.InjectRSAKeys => InjectRSAKeys("", ""),
         _ => null
     };
 
@@ -72,9 +73,10 @@ public class FlashGame : HGame
         localHostCheckMethod.Body.Code[1] = remoteHostCheckMethod.Body.Code[1] = (byte)OPCode.ReturnValue;
         return LockInfoHostProperty(out _);
     }
-    private bool DisableEncryption(ASCode sendCode = null)
+    private bool DisableEncryption(ASCode? sendCode = null)
     {
         sendCode ??= _scSendCode;
+        if (sendCode == null) return false;
 
         int localCount = 0;
         for (int i = sendCode.Count - 1; i >= 0; i--)
@@ -101,7 +103,7 @@ public class FlashGame : HGame
                 sendCode.RemoveRange(--i, 3);
             }
         }
-        if (sendCode == _scSendCode)
+        if (sendCode == _scSendCode && _scSendMethod != null)
         {
             _scSendMethod.Body.Code = _scSendCode.ToArray();
         }
@@ -110,7 +112,13 @@ public class FlashGame : HGame
 
     private bool InjectEndPoint()
     {
-        ASMethod initMethod = _socketConnectionInstance.GetMethod("init", "Boolean", 2);
+        if (_socketConnectionInstance == null) return false;
+        if (InjectableEndPoint == null)
+        {
+            ThrowHelper.ThrowNullReferenceException($"The property {InjectableEndPoint} is null.");
+        }
+
+        ASMethod? initMethod = _socketConnectionInstance.GetMethod("init", "Boolean", 2);
         if (initMethod == null) return false;
 
         if (!InjectEndPointSaver(out _, out _)) return false;
@@ -133,8 +141,14 @@ public class FlashGame : HGame
         HasPingInstructions = GetConnectionInitiationCount() > 1;
         return true;
     }
-    private bool InjectEndPointSaver(out ASTrait hostTrait, out ASTrait portTrait)
+    private bool InjectEndPointSaver(out ASTrait? hostTrait, out ASTrait? portTrait)
     {
+        if (_socketConnectionInstance == null)
+        {
+            hostTrait = portTrait = null;
+            return false;
+        }
+
         hostTrait = _socketConnectionInstance.GetSlot("remoteHost");
         portTrait = _socketConnectionInstance.GetSlot("remotePort");
         if (hostTrait != null && portTrait != null) return true;
@@ -148,13 +162,13 @@ public class FlashGame : HGame
         ASCode initCode = init.Body.ParseCode();
         initCode.InsertRange(2, new ASInstruction[]
         {
-                new GetLocal0Ins(),
-                new GetLocal1Ins(),
-                new SetPropertyIns(_socketConnectionInstance.ABC, hostTrait.QNameIndex),
+            new GetLocal0Ins(),
+            new GetLocal1Ins(),
+            new SetPropertyIns(_socketConnectionInstance.ABC, hostTrait.QNameIndex),
 
-                new GetLocal0Ins(),
-                new GetLocal2Ins(),
-                new SetPropertyIns(_socketConnectionInstance.ABC, portTrait.QNameIndex)
+            new GetLocal0Ins(),
+            new GetLocal2Ins(),
+            new SetPropertyIns(_socketConnectionInstance.ABC, portTrait.QNameIndex)
         });
         init.Body.MaxStack += 2;
         init.Body.Code = initCode.ToArray();
@@ -163,7 +177,9 @@ public class FlashGame : HGame
 
     private bool InjectKeyShouter()
     {
-        ASTrait sendFunction = InjectUniversalSendFunction();
+        if (_habboCommunicationDemoInstance == null) return false;
+
+        ASTrait? sendFunction = InjectUniversalSendFunction();
         if (sendFunction == null) return false;
 
         ASMethod onCompleteDiffieHandshakeMethod = _habboCommunicationDemoInstance.GetMethod("onCompleteDiffieHandshake", "void", 1);
@@ -212,12 +228,15 @@ public class FlashGame : HGame
     }
     private bool InjectEndPointShouter()
     {
-        ASTrait sendFunction = InjectUniversalSendFunction();
+        if (_habboCommunicationDemoInstance == null) return false;
+
+        ASTrait? sendFunction = InjectUniversalSendFunction();
         if (sendFunction == null) return false;
 
-        if (!InjectEndPointSaver(out ASTrait hostTrait, out ASTrait portTrait)) return false;
+        if (!InjectEndPointSaver(out ASTrait? hostTrait, out ASTrait? portTrait)) return false;
+        if (hostTrait == null || portTrait == null) return false;
 
-        ASCode onConnectionEstablishedCode = null;
+        ASCode? onConnectionEstablishedCode = null;
         ASMethod onConnectionEstablishedMethod = _habboCommunicationDemoInstance.GetMethod("onConnectionEstablished");
         if (onConnectionEstablishedMethod == null)
         {
@@ -238,6 +257,8 @@ public class FlashGame : HGame
                 }
             }
         }
+
+        if (onConnectionEstablishedMethod == null) return false;
         if (onConnectionEstablishedCode == null)
         {
             onConnectionEstablishedCode = onConnectionEstablishedMethod.Body.ParseCode();
@@ -268,6 +289,16 @@ public class FlashGame : HGame
     }
     private bool InjectRSAKeys(string exponent, string modulus)
     {
+        if (_habboCommunicationDemoInstance == null) return false;
+        if (string.IsNullOrWhiteSpace(exponent))
+        {
+            ThrowHelper.ThrowArgumentException("The specified public key must not be empty or null.", nameof(exponent));
+        }
+        if (string.IsNullOrWhiteSpace(modulus))
+        {
+            ThrowHelper.ThrowArgumentException("The specified public key must not be empty or null.", nameof(modulus));
+        }
+
         foreach (ASMethod method in _habboCommunicationDemoInstance.GetMethods(null, "void", 1))
         {
             if (method.Body.LocalCount < 10) continue;
@@ -292,8 +323,8 @@ public class FlashGame : HGame
                 code.RemoveRange(i - 7, 6);
                 code.InsertRange(i - 7, new ASInstruction[]
                 {
-                        new PushStringIns(_habboCommunicationDemoInstance.ABC, modulus),
-                        new PushStringIns(_habboCommunicationDemoInstance.ABC, exponent),
+                    new PushStringIns(_habboCommunicationDemoInstance.ABC, modulus),
+                    new PushStringIns(_habboCommunicationDemoInstance.ABC, exponent),
                 });
 
                 method.Body.Code = code.ToArray();
@@ -305,9 +336,12 @@ public class FlashGame : HGame
 
     private int GetConnectionInitiationCount()
     {
-        int initiationCount = 0;
-        if (!LockInfoHostProperty(out ASTrait infoHostSlot)) return initiationCount;
+        if (_hcmNextPortMethod == null) return 0;
 
+        if (!LockInfoHostProperty(out ASTrait? infoHostSlot)) return 0;
+        if (infoHostSlot == null) return 0;
+
+        int initiationCount = 0;
         ASCode connectCode = _hcmNextPortMethod.Body.ParseCode();
         for (int i = 0; i < connectCode.Count; i++)
         {
@@ -328,11 +362,12 @@ public class FlashGame : HGame
         }
         return initiationCount;
     }
-    private ASTrait InjectUniversalSendFunction()
+    private ASTrait? InjectUniversalSendFunction()
     {
+        if (_socketConnectionInstance == null || _scSendMethod == null) return null;
         ABCFile abc = _socketConnectionInstance.ABC;
 
-        ASTrait sendFunctionTrait = _socketConnectionInstance.GetMethod("sendMessage", "Boolean", 1)?.Trait;
+        ASTrait? sendFunctionTrait = _socketConnectionInstance.GetMethod("sendMessage", "Boolean", 1)?.Trait;
         if (sendFunctionTrait != null) return sendFunctionTrait;
 
         ASCode trimmedSendCode = _scSendMethod.Body.ParseCode();
@@ -352,8 +387,8 @@ public class FlashGame : HGame
         }
         trimmedSendCode.InsertRange(2, new ASInstruction[2]
         {
-                new GetLocal1Ins(),
-                new SetLocalIns(4)
+            new GetLocal1Ins(),
+            new SetLocalIns(4)
         });
 
         var sendMessageMethod = new ASMethod(abc);
@@ -384,24 +419,30 @@ public class FlashGame : HGame
         _socketConnectionInstance.AddMethod(sendMessageMethod, "sendMessage");
         return sendMessageMethod.Trait;
     }
-    private bool LockInfoHostProperty(out ASTrait infoHostSlot)
+    private bool LockInfoHostProperty(out ASTrait? infoHostSlot)
     {
+        if (_habboCommunicationManagerInstance == null || _hcmNextPortMethod == null)
+        {
+            infoHostSlot = null;
+            return false;
+        }
+
         ABCFile abc = _habboCommunicationManagerInstance.ABC;
 
         ASCode connectCode = _hcmNextPortMethod.Body.ParseCode();
         int pushByteIndex = connectCode.IndexOf(OPCode.PushByte);
 
-        infoHostSlot = _habboCommunicationManagerInstance?.GetSlotTraits("String").FirstOrDefault();
+        infoHostSlot = _habboCommunicationManagerInstance.GetSlotTraits("String").FirstOrDefault();
         if (infoHostSlot == null) return false;
 
         int getPropertyIndex = abc.Pool.GetMultinameIndex("getProperty");
         connectCode.InsertRange(pushByteIndex, new ASInstruction[]
         {
-                new GetLocal0Ins(),
-                new FindPropStrictIns(abc, getPropertyIndex),
-                new PushStringIns(abc, "connection.info.host"),
-                new CallPropertyIns(abc, getPropertyIndex, 1),
-                new InitPropertyIns(abc, infoHostSlot.QNameIndex)
+            new GetLocal0Ins(),
+            new FindPropStrictIns(abc, getPropertyIndex),
+            new PushStringIns(abc, "connection.info.host"),
+            new CallPropertyIns(abc, getPropertyIndex, 1),
+            new InitPropertyIns(abc, infoHostSlot.QNameIndex)
         });
 
         // This portion prevents any suffix from being added to the host slot.
@@ -453,14 +494,13 @@ public class FlashGame : HGame
 
                 if (interfaceInstance.GetMethod(method.Trait.QName.Name, method.ReturnType.Name, method.Parameters.Count) == null) continue;
 
-                FlashMessage[] interfaceReferencedMessages = null;
                 fullName = $"{interfaceInstance.QName.Namespace.Name}:{interfaceName.Name}.{method.Trait.QName.Name}";
                 if (methodsReferencingMessages.TryGetValue(fullName, out (int Count, FlashMessage[] InterfaceReferencedMessages) messages))
                 {
                     methodsReferencingMessages.Remove(fullName);
                 }
 
-                interfaceReferencedMessages = ArrayPool<FlashMessage>.Shared.Rent(OutCount + messages.Count);
+                FlashMessage[] interfaceReferencedMessages = ArrayPool<FlashMessage>.Shared.Rent(OutCount + messages.Count);
                 Array.Copy(referencedMessages, 0, interfaceReferencedMessages, 0, OutCount);
 
                 if (messages.InterfaceReferencedMessages != null)
@@ -508,7 +548,7 @@ public class FlashGame : HGame
 
     private bool PrepareFlashMessages(ABCFile abc)
     {
-        ASClass habboMessagesClass = null;
+        ASClass? habboMessagesClass = null;
         foreach (ASClass @class in abc.Classes)
         {
             if (@class.Traits.Count != 2 || @class.Instance.Traits.Count != 2) continue;
@@ -541,24 +581,24 @@ public class FlashGame : HGame
         int inMapTypeIndex = habboMessagesClass.Traits[0].QNameIndex;
         int outMapTypeIndex = habboMessagesClass.Traits[1].QNameIndex;
 
-        ASInstruction[] instructions = code
-            .Where(i => i.OP == OPCode.GetLex ||
-                        i.OP == OPCode.PushShort ||
-                        i.OP == OPCode.PushByte).ToArray();
+        ASInstruction[] instructions = code.Where(i => i.OP
+            is OPCode.GetLex
+            or OPCode.PushShort
+            or OPCode.PushByte).ToArray();
 
         for (int i = 0; i < instructions.Length; i += 3)
         {
-            var getLexInst = instructions[i] as GetLexIns;
-            bool isOutgoing = getLexInst.TypeNameIndex == outMapTypeIndex;
+            if (instructions[i] is not GetLexIns getLexMapIns) continue;
+            bool isOutgoing = getLexMapIns.TypeNameIndex == outMapTypeIndex;
 
-            var primitive = instructions[i + 1] as Primitive;
+            if (instructions[i + 1] is not Primitive primitive) continue;
             short id = Convert.ToInt16(primitive.Value);
 
-            getLexInst = instructions[i + 2] as GetLexIns;
-            ASClass messageClass = abc.GetClass(getLexInst.TypeName);
+            if (instructions[i + 2] is not GetLexIns getLexTypeIns) continue;
+            ASClass messageClass = abc.GetClass(getLexTypeIns.TypeName);
 
-            ASClass parser = null;
-            string structure = null;
+            ASClass? parser = null;
+            string? structure = null;
             if (!isOutgoing)
             {
                 parser = GetMessageParser(messageClass);
@@ -615,6 +655,7 @@ public class FlashGame : HGame
                         break; // This should be the last method, so exit the loop.
                     }
                 }
+
                 if (_scSendMethod == null && _scSendUnencryptedMethod == null) return false;
 
                 // Deobfuscation on this method on older clients is tricky, avoid for now.
@@ -627,14 +668,20 @@ public class FlashGame : HGame
                 //}
 
                 // send Deobfuscation
-                _scSendCode = _scSendMethod.Body.ParseCode();
-                _scSendCode.Deobfuscate();
-                _scSendMethod.Body.Code = _scSendCode.ToArray();
+                if (_scSendMethod != null)
+                {
+                    _scSendCode = _scSendMethod.Body.ParseCode();
+                    _scSendCode.Deobfuscate();
+                    _scSendMethod.Body.Code = _scSendCode.ToArray();
+                }
 
                 // sendUnencrypted Deobfuscation
-                _scSendUnencryptedCode = _scSendUnencryptedMethod.Body.ParseCode();
-                _scSendUnencryptedCode.Deobfuscate();
-                _scSendUnencryptedMethod.Body.Code = _scSendUnencryptedCode.ToArray();
+                if (_scSendUnencryptedMethod != null)
+                {
+                    _scSendUnencryptedCode = _scSendUnencryptedMethod.Body.ParseCode();
+                    _scSendUnencryptedCode.Deobfuscate();
+                    _scSendUnencryptedMethod.Body.Code = _scSendUnencryptedCode.ToArray();
+                }
             }
         }
         return _socketConnectionInstance != null;
@@ -696,29 +743,32 @@ public class FlashGame : HGame
 
                     if (instance.InterfaceIndices.Count != 2) continue;
                     if (instance.Constructor.Parameters.Count != 3) continue;
-                    if (instance.Traits.Count < 35 || instance.Traits.Count >= 50) continue;
+                    if (instance.Traits.Count is < 35 or >= 50) continue;
 
                     _habboCommunicationManagerInstance = instance;
                     break;
                 }
             }
+
             //Attempts to find this object failed.
             if (_habboCommunicationManagerInstance == null) return false;
 
-            ASTrait hostTrait = _habboCommunicationManagerInstance?.GetSlotTraits("String").FirstOrDefault();
+            ASTrait? hostTrait = _habboCommunicationManagerInstance.GetSlotTraits("String").FirstOrDefault();
             if (hostTrait == null) return false;
 
-            ASMethod initComponentMethod = _habboCommunicationManagerInstance?.GetMethod("initComponent", "void", 0);
+            ASMethod? initComponentMethod = _habboCommunicationManagerInstance.GetMethod("initComponent", "void", 0);
             if (initComponentMethod == null) return false;
 
             int callPropVoidCount = 0;
             ASCode initComponentCode = initComponentMethod.Body.ParseCode();
+
             for (int i = initComponentCode.Count - 1; i >= 0; i--)
             {
                 ASInstruction instruction = initComponentCode[i];
                 if (instruction.OP != OPCode.CallPropVoid) continue;
 
                 var callPropVoidIns = (CallPropVoidIns)instruction;
+
                 switch (callPropVoidCount)
                 {
                     case 0: _hcmNextPortMethod = _habboCommunicationManagerInstance.GetMethod(callPropVoidIns.PropertyName.Name, "void", callPropVoidIns.ArgCount); break;
@@ -768,7 +818,10 @@ public class FlashGame : HGame
             PrepareHabboCommunicationDemo(abc);
             PrepareHabboCommunicationManager(abc);
         }
-        IsAir = !Revision.StartsWith("PRODUCTION");
+        if (!string.IsNullOrWhiteSpace(Revision))
+        {
+            IsAir = !Revision.StartsWith("PRODUCTION");
+        }
     }
     public override void Assemble(string path)
     {
@@ -822,7 +875,7 @@ public class FlashGame : HGame
             using var codeReader = new FlashReader(method.Body.Code);
             while (codeReader.IsDataAvailable)
             {
-                ASMultiname slotName = null;
+                ASMultiname? slotName = null;
                 var instruction = ASInstruction.Create(method.ABC, codeReader);
                 if (instruction.OP == OPCode.GetProperty)
                 {
@@ -837,7 +890,7 @@ public class FlashGame : HGame
                     if (slotName.Kind == MultinameKind.Multiname) continue;
                     if (slotName.Namespace?.Name == instance.ProtectedNamespace?.Name) // This is a private field in the current container.
                     {
-                        ASTrait trait = method.Container.Traits.FirstOrDefault(t => t.QName == slotName);
+                        ASTrait? trait = method.Container.Traits.FirstOrDefault(t => t.QName == slotName);
                         if (trait?.Type == null || trait.Type.Kind == MultinameKind.TypeName) continue;
 
                         names.Push(trait.Type);
@@ -848,7 +901,7 @@ public class FlashGame : HGame
                         ASInstance slotInstance = method.ABC.GetInstance(slotReturnType);
                         if (slotInstance != null)
                         {
-                            ASTrait innerTrait = slotInstance.Traits.FirstOrDefault(t => t.QName == slotName);
+                            ASTrait? innerTrait = slotInstance.Traits.FirstOrDefault(t => t.QName == slotName);
                             if (innerTrait != null)
                             {
                                 ASMultiname name = innerTrait.Method?.ReturnType ?? innerTrait.Type;
@@ -872,7 +925,7 @@ public class FlashGame : HGame
                     nameBuilder.Append(':');
                     nameBuilder.Append(slotType.Name);
                 }
-                else nameBuilder.Append(callPropVoidIns.PropertyName.Namespace.Name);
+                else nameBuilder.Append(callPropVoidIns.PropertyName.Namespace?.Name);
 
                 nameBuilder.Append('.');
                 nameBuilder.Append(callPropVoidIns.PropertyName.Name);
@@ -899,7 +952,7 @@ public class FlashGame : HGame
     {
         int outCount = 0, inCount = 0;
         var names = new Stack<ASMultiname>(2);
-        ConstructPropIns messageConstructIns = null;
+        ConstructPropIns? messageConstructIns = null;
         using var codeReader = new FlashReader(method.Body.Code);
         while (codeReader.IsDataAvailable)
         {
@@ -937,8 +990,8 @@ public class FlashGame : HGame
             }
             else referencedMessagesBuffer[inCount++] = flashMessage;
 
-            ASMethod callbackMethod = null;
-            if (!flashMessage.IsOutgoing)
+            ASMethod? callbackMethod = null;
+            if (flashMessage.ParserClass != null)
             {
                 ASMultiname callbackName = names.Pop(); // This should be the QName of the callback method.
                 if (!flashMessage.IsOutgoing && callbackName == flashMessage.ParserClass.QName)
@@ -947,7 +1000,7 @@ public class FlashGame : HGame
                 }
 
                 ASContainer callbackContainer = method.Container;
-                ASTrait trait = callbackContainer.Traits.FirstOrDefault(t => t.QName == callbackName);
+                ASTrait? trait = callbackContainer.Traits.FirstOrDefault(t => t.QName == callbackName);
                 if (trait == null && names.Count > 0) // This is perhaps a reference to an instance slot/field, or a method in a static class.
                 {
                     trait = callbackContainer.Traits.FirstOrDefault(t => t.QName == names.Peek()); // Is the next name possibly a trait in the current container?
@@ -959,7 +1012,7 @@ public class FlashGame : HGame
                     else callbackContainer = method.ABC.GetClass(names.Pop()); // This HAS to be a static class, right?
                     trait = callbackContainer.Traits.FirstOrDefault(t => t.QName == callbackName);
                 }
-                callbackMethod = trait.Method;
+                callbackMethod = trait?.Method;
             }
 
             flashMessage.References.Add(new FlashMessageReference
@@ -974,26 +1027,10 @@ public class FlashGame : HGame
         // Return the amount of message references that were found in this method.
         return (outCount, inCount);
     }
-
-    private string TrimMessageName(string name, bool isOutgoing)
-    {
-        string lastWord = isOutgoing ? "Composer" : "Event";
-        string fullSuffix = isOutgoing ? "MessageComposer" : "MessageEvent";
-        if (name.EndsWith(lastWord))
-        {
-            int unwantedNameStart = name.LastIndexOf(fullSuffix);
-            if (unwantedNameStart == -1)
-            {
-                unwantedNameStart = name.Length - lastWord.Length;
-            }
-            name = name[..unwantedNameStart];
-        }
-        return name;
-    }
     #endregion
 
     #region Structure Extraction
-    private ASClass GetMessageParser(ASClass messageClass)
+    private static ASClass? GetMessageParser(ASClass messageClass)
     {
         ABCFile abc = messageClass.ABC;
         ASInstance instance = messageClass.Instance;
@@ -1001,7 +1038,7 @@ public class FlashGame : HGame
         ASInstance superInstance = abc.GetInstance(instance.Super);
         if (superInstance == null) superInstance = instance;
 
-        ASMethod parserGetterMethod = superInstance.GetGetter("parser")?.Method;
+        ASMethod? parserGetterMethod = superInstance.GetGetter("parser")?.Method;
         if (parserGetterMethod == null) return null;
 
         IEnumerable<ASMethod> methods = instance.GetMethods();
@@ -1010,7 +1047,7 @@ public class FlashGame : HGame
             ASCode code = method.Body.ParseCode();
             foreach (ASInstruction instruction in code)
             {
-                ASMultiname multiname = null;
+                ASMultiname? multiname = null;
                 if (instruction.OP == OPCode.FindPropStrict)
                 {
                     var findPropStrictIns = (FindPropStrictIns)instruction;
@@ -1035,194 +1072,63 @@ public class FlashGame : HGame
         }
         return null;
     }
-
-    private string GetIncomingStructure(ASClass @class)
+    private static ASMultiname? GetTraitType(ASContainer? container, ASMultiname traitName)
     {
-        ASMethod parseMethod = @class.Instance.GetMethod("parse", "Boolean", 1);
-        return GetIncomingStructure(@class.Instance, parseMethod);
+        return container == null
+            ? traitName
+            : (container.GetTraits(TraitKind.Slot, TraitKind.Constant, TraitKind.Getter).Where(t => t.QName == traitName).FirstOrDefault()?.Type);
     }
-    private string GetIncomingStructure(ASInstance instance, ASMethod method)
+    private static bool TryGetStructurePiece(bool isOutgoing, ASMultiname? multiname, ASClass? @class, out char piece)
     {
-        if (method.Body.Exceptions.Count > 0) return null;
-
-        ASCode code = method.Body.ParseCode();
-        if (code.JumpExits.Count > 0 || code.SwitchExits.Count > 0) return null;
-
-        string structure = null;
-        ABCFile abc = method.ABC;
-        for (int i = 0; i < code.Count; i++)
+        ASMultiname? returnValueType = multiname;
+        if (@class != null && multiname != null)
         {
-            ASInstruction instruction = code[i];
-            if (instruction.OP != OPCode.GetLocal_1) continue;
+            returnValueType = GetTraitType(@class, multiname) ?? GetTraitType(@class.Instance, multiname);
+        }
 
-            ASInstruction next = code[++i];
-            switch (next.OP)
+        if (returnValueType == null)
+        {
+            piece = char.MinValue;
+            return false;
+        }
+
+        switch (returnValueType.Name.ToLower())
+        {
+            case "int":
+            case "readint":
+            case "readinteger":
+            case "gettimer": piece = 'i'; break;
+
+            case "byte":
+            case "readbyte": piece = 'b'; break;
+
+            case "double":
+            case "readdouble": piece = 'd'; break;
+
+            case "string":
+            case "readstring": piece = 's'; break;
+
+            case "boolean":
+            case "readboolean": piece = 'B'; break;
+
+            case "array": piece = char.MinValue; break;
+
+            default:
             {
-                case OPCode.CallProperty:
+                if (!isOutgoing && !IsValidIdentifier(returnValueType.Name))
                 {
-                    var callProperty = (CallPropertyIns)next;
-                    if (callProperty.ArgCount > 0)
-                    {
-                        ASMultiname propertyName = null;
-                        ASInstruction previous = code[i - 2];
-
-                        switch (previous.OP)
-                        {
-                            case OPCode.FindPropStrict:
-                            {
-                                var findPropStrict = (FindPropStrictIns)previous;
-                                propertyName = findPropStrict.PropertyName;
-                                break;
-                            }
-                            case OPCode.GetLex:
-                            {
-                                var getLex = (GetLexIns)previous;
-                                propertyName = getLex.TypeName;
-                                break;
-                            }
-                            case OPCode.ConstructProp:
-                            {
-                                var constructProp = (ConstructPropIns)previous;
-                                propertyName = constructProp.PropertyName;
-                                break;
-                            }
-                            case OPCode.GetLocal_0:
-                            {
-                                propertyName = instance.QName;
-                                break;
-                            }
-                        }
-
-                        ASInstance innerInstance = abc.GetInstance(propertyName) ?? instance;
-                        ASMethod innerMethod = innerInstance.GetMethod(callProperty.PropertyName.Name, null, callProperty.ArgCount);
-                        if (innerMethod == null)
-                        {
-                            ASClass innerClass = abc.GetClass(propertyName);
-                            innerMethod = innerClass.GetMethod(callProperty.PropertyName.Name, null, callProperty.ArgCount);
-                        }
-
-                        string innerStructure = GetIncomingStructure(innerInstance, innerMethod);
-                        if (string.IsNullOrWhiteSpace(innerStructure)) return null;
-                        structure += innerStructure;
-                    }
-                    else
-                    {
-                        if (!TryGetStructurePiece(false, callProperty.PropertyName, null, out char piece)) return null;
-                        structure += piece;
-                    }
-                    break;
+                    piece = 'i'; // This reference call is most likely towards 'readInt'
                 }
-
-                case OPCode.ConstructProp:
-                {
-                    var constructProp = (ConstructPropIns)next;
-                    ASInstance innerInstance = abc.GetInstance(constructProp.PropertyName);
-
-                    string innerStructure = GetIncomingStructure(innerInstance, innerInstance.Constructor);
-                    if (string.IsNullOrWhiteSpace(innerStructure)) return null;
-                    structure += innerStructure;
-                    break;
-                }
-
-                case OPCode.ConstructSuper:
-                {
-                    ASInstance superInstance = abc.GetInstance(instance.Super);
-
-                    string innerStructure = GetIncomingStructure(superInstance, superInstance.Constructor);
-                    if (string.IsNullOrWhiteSpace(innerStructure)) return null;
-                    structure += innerStructure;
-                    break;
-                }
-
-                case OPCode.CallSuper:
-                {
-                    var callSuper = (CallSuperIns)next;
-                    ASInstance superInstance = abc.GetInstance(instance.Super);
-                    ASMethod superMethod = superInstance.GetMethod(callSuper.MethodName.Name, null, callSuper.ArgCount);
-
-                    string innerStructure = GetIncomingStructure(superInstance, superMethod);
-                    if (string.IsNullOrWhiteSpace(innerStructure)) return null;
-                    structure += innerStructure;
-                    break;
-                }
-
-                case OPCode.CallPropVoid:
-                {
-                    var callPropVoid = (CallPropVoidIns)next;
-                    if (callPropVoid.ArgCount != 0) return null;
-
-                    if (!TryGetStructurePiece(false, callPropVoid.PropertyName, null, out char piece)) return null;
-                    structure += piece;
-                    break;
-                }
-
-                default: return null;
-            }
-        }
-        return structure;
-    }
-
-    private string GetOutgoingStructure(ASClass messageClass, ASClass @class)
-    {
-        ASMethod getArrayMethod = @class.Instance.GetMethod(null, "Array", 0);
-        if (getArrayMethod == null)
-        {
-            ASClass superClass = @class.ABC.GetClass(@class.Instance.Super);
-            return GetOutgoingStructure(messageClass, superClass);
-        }
-        if (getArrayMethod.Body.Exceptions.Count > 0) return null;
-        ASCode getArrayCode = getArrayMethod.Body.ParseCode();
-
-        if (getArrayMethod.ReturnType == null || getArrayCode.JumpExits.Count > 0 || getArrayCode.SwitchExits.Count > 0)
-        {
-            // TODO: Parse for reading loops/jumps.
-            return null;
-        }
-
-        ASInstruction resultPusher = null;
-        for (int i = getArrayCode.Count - 1; i >= 0; i--)
-        {
-            ASInstruction instruction = getArrayCode[i];
-            if (instruction.OP == OPCode.ReturnValue)
-            {
-                resultPusher = getArrayCode[i - 1];
+                else piece = char.MinValue;
                 break;
             }
         }
-
-        int argCount = -1;
-        if (resultPusher.OP == OPCode.ConstructProp)
-        {
-            argCount = ((ConstructPropIns)resultPusher).ArgCount;
-        }
-        else if (resultPusher.OP == OPCode.NewArray)
-        {
-            argCount = ((NewArrayIns)resultPusher).ArgCount;
-        }
-
-        if (argCount > 0)
-        {
-            return GetOutgoingStructure(messageClass, getArrayCode, resultPusher, argCount);
-        }
-        else if (argCount == 0 || resultPusher.OP == OPCode.PushNull)
-        {
-            return null;
-        }
-
-        if (resultPusher.OP == OPCode.GetProperty)
-        {
-            var getProperty = (GetPropertyIns)resultPusher;
-            return GetOutgoingStructure(messageClass, getProperty.PropertyName);
-        }
-        else if (Local.IsGetLocal(resultPusher.OP))
-        {
-            return GetOutgoingStructure(messageClass, getArrayCode, (Local)resultPusher);
-        }
-        return null;
+        return piece != char.MinValue;
     }
-    private string GetOutgoingStructure(ASClass messageClass, ASCode code, Local getLocal)
+
+    private static string? GetOutgoingStructure(ASClass messageClass, ASCode code, Local getLocal)
     {
-        string structure = null;
+        string? structure = null;
         for (int i = 0; i < code.Count; i++)
         {
             ASInstruction instruction = code[i];
@@ -1260,117 +1166,12 @@ public class FlashGame : HGame
         }
         return structure;
     }
-    private string GetOutgoingStructure(ASClass @class, ASMultiname propertyName)
-    {
-        ASMethod constructor = @class.Instance.Constructor;
-        if (constructor.Body.Exceptions.Count > 0) return null;
-
-        ASCode code = constructor.Body.ParseCode();
-        if (code.JumpExits.Count > 0 || code.SwitchExits.Count > 0) return null;
-
-        string structure = null;
-        for (int i = 0; i < code.Count; i++)
-        {
-            ASInstruction instruction = code[i];
-            if (instruction.OP == OPCode.NewArray)
-            {
-                var newArray = (NewArrayIns)instruction;
-                if (newArray.ArgCount > 0)
-                {
-                    var structurePieces = new char[newArray.ArgCount];
-                    for (int j = i - 1, length = newArray.ArgCount; j >= 0; j--)
-                    {
-                        ASInstruction previous = code[j];
-                        if (Local.IsGetLocal(previous.OP) && previous.OP != OPCode.GetLocal_0)
-                        {
-                            var local = (Local)previous;
-                            ASParameter parameter = constructor.Parameters[local.Register - 1];
-
-                            if (!TryGetStructurePiece(true, parameter.Type, null, out char piece)) return null;
-                            structurePieces[--length] = piece;
-                        }
-                        if (length == 0)
-                        {
-                            structure += new string(structurePieces);
-                            break;
-                        }
-                    }
-                }
-            }
-            else if (instruction.OP == OPCode.ConstructSuper)
-            {
-                var constructSuper = (ConstructSuperIns)instruction;
-                if (constructSuper.ArgCount > 0)
-                {
-                    ASClass superClass = @class.ABC.GetClass(@class.Instance.Super);
-                    structure += GetOutgoingStructure(superClass, propertyName);
-                }
-            }
-            if (instruction.OP != OPCode.GetProperty) continue;
-
-            var getProperty = (GetPropertyIns)instruction;
-            if (getProperty.PropertyName != propertyName) continue;
-
-            ASInstruction next = code[++i];
-            ASClass classToCheck = @class;
-            if (Local.IsGetLocal(next.OP))
-            {
-                if (next.OP == OPCode.GetLocal_0) continue;
-
-                var local = (Local)next;
-                ASParameter parameter = constructor.Parameters[local.Register - 1];
-
-                if (!TryGetStructurePiece(true, parameter.Type, null, out char piece)) return null;
-                structure += piece;
-            }
-            else if (Primitive.IsValid(next.OP) && code[i + 1].OP == OPCode.CallPropVoid) // Could it be 'push(pop())'?
-            {
-                switch (next.OP)
-                {
-                    case OPCode.PushByte: structure += 'B'; break;
-                    default: break;
-                }
-            }
-            else
-            {
-                if (next.OP == OPCode.FindPropStrict)
-                {
-                    classToCheck = null;
-                }
-                else if (next.OP == OPCode.GetLex)
-                {
-                    var getLex = (GetLexIns)next;
-                    classToCheck = classToCheck.ABC.GetClass(getLex.TypeName);
-                }
-                do
-                {
-                    next = code[++i];
-                    propertyName = null;
-                    if (next.OP == OPCode.GetProperty)
-                    {
-                        getProperty = (GetPropertyIns)next;
-                        propertyName = getProperty.PropertyName;
-                    }
-                    else if (next.OP == OPCode.CallProperty)
-                    {
-                        var callProperty = (CallPropertyIns)next;
-                        propertyName = callProperty.PropertyName;
-                    }
-                }
-                while (next.OP != OPCode.GetProperty && next.OP != OPCode.CallProperty);
-
-                if (!TryGetStructurePiece(true, propertyName, classToCheck, out char piece)) return null;
-                structure += piece;
-            }
-        }
-        return structure;
-    }
-    private string GetOutgoingStructure(ASClass messageClass, ASCode code, ASInstruction beforeReturn, int length)
+    private static string? GetOutgoingStructure(ASClass messageClass, ASCode code, ASInstruction beforeReturn, int length)
     {
         var getLocalEndIndex = -1;
         int pushingEndIndex = code.IndexOf(beforeReturn);
 
-        ASMultiname propertyName = null;
+        ASMultiname? propertyName = null;
         var structure = new char[length];
         var pushedLocals = new Dictionary<int, int>();
         for (int i = pushingEndIndex - 1; i >= 0; i--)
@@ -1432,7 +1233,7 @@ public class FlashGame : HGame
                     OPCode.PushTrue or OPCode.PushFalse => 'B',
                     OPCode.Coerce_s or OPCode.PushString => 's',
                     OPCode.PushInt or OPCode.PushByte or OPCode.Convert_i => 'i',
-                    _ => throw new Exception($"Don't know what this value type is, tell someone about this please.\r\nOP: {beforeSet.OP}"),
+                    _ => throw new NotSupportedException($"Don't know what this value type is, tell someone about this please.\r\nOP: {beforeSet.OP}"),
                 };
             }
             if (pushedLocals.Count == 0) break;
@@ -1440,54 +1241,295 @@ public class FlashGame : HGame
         return new string(structure);
     }
 
-    private ASMultiname GetTraitType(ASContainer container, ASMultiname traitName)
+    private string? GetIncomingStructure(ASClass @class)
     {
-        if (container == null) return traitName;
-
-        return container.GetTraits(TraitKind.Slot, TraitKind.Constant, TraitKind.Getter)
-            .Where(t => t.QName == traitName)
-            .FirstOrDefault()?.Type;
+        ASMethod parseMethod = @class.Instance.GetMethod("parse", "Boolean", 1);
+        return GetIncomingStructure(@class.Instance, parseMethod);
     }
-    private bool TryGetStructurePiece(bool isOutgoing, ASMultiname multiname, ASClass @class, out char piece)
+    private string? GetIncomingStructure(ASInstance instance, ASMethod method)
     {
-        ASMultiname returnValueType = multiname;
-        if (@class != null)
+        if (method.Body.Exceptions.Count > 0) return null;
+
+        ASCode code = method.Body.ParseCode();
+        if (code.JumpExits.Count > 0 || code.SwitchExits.Count > 0) return null;
+
+        string? structure = null;
+        ABCFile abc = method.ABC;
+        for (int i = 0; i < code.Count; i++)
         {
-            returnValueType = GetTraitType(@class, multiname) ?? GetTraitType(@class.Instance, multiname);
+            ASInstruction instruction = code[i];
+            if (instruction.OP != OPCode.GetLocal_1) continue;
+
+            ASInstruction next = code[++i];
+            switch (next.OP)
+            {
+                case OPCode.CallProperty:
+                {
+                    var callProperty = (CallPropertyIns)next;
+                    if (callProperty.ArgCount > 0)
+                    {
+                        ASMultiname? propertyName = null;
+                        ASInstruction previous = code[i - 2];
+
+                        switch (previous.OP)
+                        {
+                            case OPCode.FindPropStrict:
+                            {
+                                var findPropStrict = (FindPropStrictIns)previous;
+                                propertyName = findPropStrict.PropertyName;
+                                break;
+                            }
+                            case OPCode.GetLex:
+                            {
+                                var getLex = (GetLexIns)previous;
+                                propertyName = getLex.TypeName;
+                                break;
+                            }
+                            case OPCode.ConstructProp:
+                            {
+                                var constructProp = (ConstructPropIns)previous;
+                                propertyName = constructProp.PropertyName;
+                                break;
+                            }
+                            case OPCode.GetLocal_0:
+                            {
+                                propertyName = instance.QName;
+                                break;
+                            }
+                        }
+
+                        ASInstance innerInstance = abc.GetInstance(propertyName) ?? instance;
+                        ASMethod innerMethod = innerInstance.GetMethod(callProperty.PropertyName.Name, null, callProperty.ArgCount);
+                        if (innerMethod == null)
+                        {
+                            ASClass innerClass = abc.GetClass(propertyName);
+                            innerMethod = innerClass.GetMethod(callProperty.PropertyName.Name, null, callProperty.ArgCount);
+                        }
+
+                        string? innerStructure = GetIncomingStructure(innerInstance, innerMethod);
+                        if (string.IsNullOrWhiteSpace(innerStructure)) return null;
+                        structure += innerStructure;
+                    }
+                    else
+                    {
+                        if (!TryGetStructurePiece(false, callProperty.PropertyName, null, out char piece)) return null;
+                        structure += piece;
+                    }
+                    break;
+                }
+
+                case OPCode.ConstructProp:
+                {
+                    var constructProp = (ConstructPropIns)next;
+                    ASInstance innerInstance = abc.GetInstance(constructProp.PropertyName);
+
+                    string? innerStructure = GetIncomingStructure(innerInstance, innerInstance.Constructor);
+                    if (string.IsNullOrWhiteSpace(innerStructure)) return null;
+                    structure += innerStructure;
+                    break;
+                }
+
+                case OPCode.ConstructSuper:
+                {
+                    ASInstance superInstance = abc.GetInstance(instance.Super);
+
+                    string? innerStructure = GetIncomingStructure(superInstance, superInstance.Constructor);
+                    if (string.IsNullOrWhiteSpace(innerStructure)) return null;
+                    structure += innerStructure;
+                    break;
+                }
+
+                case OPCode.CallSuper:
+                {
+                    var callSuper = (CallSuperIns)next;
+                    ASInstance superInstance = abc.GetInstance(instance.Super);
+                    ASMethod superMethod = superInstance.GetMethod(callSuper.MethodName.Name, null, callSuper.ArgCount);
+
+                    string? innerStructure = GetIncomingStructure(superInstance, superMethod);
+                    if (string.IsNullOrWhiteSpace(innerStructure)) return null;
+                    structure += innerStructure;
+                    break;
+                }
+
+                case OPCode.CallPropVoid:
+                {
+                    var callPropVoid = (CallPropVoidIns)next;
+                    if (callPropVoid.ArgCount != 0) return null;
+
+                    if (!TryGetStructurePiece(false, callPropVoid.PropertyName, null, out char piece)) return null;
+                    structure += piece;
+                    break;
+                }
+
+                default: return null;
+            }
+        }
+        return structure;
+    }
+
+    private string? GetOutgoingStructure(ASClass messageClass, ASClass @class)
+    {
+        ASMethod getArrayMethod = @class.Instance.GetMethod(null, "Array", 0);
+        if (getArrayMethod == null)
+        {
+            ASClass superClass = @class.ABC.GetClass(@class.Instance.Super);
+            return GetOutgoingStructure(messageClass, superClass);
+        }
+        if (getArrayMethod.Body.Exceptions.Count > 0) return null;
+        ASCode getArrayCode = getArrayMethod.Body.ParseCode();
+
+        if (getArrayMethod.ReturnType == null || getArrayCode.JumpExits.Count > 0 || getArrayCode.SwitchExits.Count > 0)
+        {
+            // TODO: Parse for reading loops/jumps.
+            return null;
         }
 
-        switch (returnValueType.Name.ToLower())
+        ASInstruction? resultPusher = null;
+        for (int i = getArrayCode.Count - 1; i >= 0; i--)
         {
-            case "int":
-            case "readint":
-            case "readinteger":
-            case "gettimer": piece = 'i'; break;
-
-            case "byte":
-            case "readbyte": piece = 'b'; break;
-
-            case "double":
-            case "readdouble": piece = 'd'; break;
-
-            case "string":
-            case "readstring": piece = 's'; break;
-
-            case "boolean":
-            case "readboolean": piece = 'B'; break;
-
-            case "array": piece = char.MinValue; break;
-
-            default:
+            ASInstruction instruction = getArrayCode[i];
+            if (instruction.OP == OPCode.ReturnValue)
             {
-                if (!isOutgoing && !IsValidIdentifier(returnValueType.Name))
-                {
-                    piece = 'i'; // This reference call is most likely towards 'readInt'
-                }
-                else piece = char.MinValue;
+                resultPusher = getArrayCode[i - 1];
                 break;
             }
         }
-        return piece != char.MinValue;
+        if (resultPusher == null) return null;
+
+        int argCount = -1;
+        if (resultPusher.OP == OPCode.ConstructProp)
+        {
+            argCount = ((ConstructPropIns)resultPusher).ArgCount;
+        }
+        else if (resultPusher.OP == OPCode.NewArray)
+        {
+            argCount = ((NewArrayIns)resultPusher).ArgCount;
+        }
+
+        if (argCount > 0)
+        {
+            return GetOutgoingStructure(messageClass, getArrayCode, resultPusher, argCount);
+        }
+        else if (argCount == 0 || resultPusher.OP == OPCode.PushNull)
+        {
+            return null;
+        }
+
+        if (resultPusher.OP == OPCode.GetProperty)
+        {
+            var getProperty = (GetPropertyIns)resultPusher;
+            return GetOutgoingStructure(messageClass, getProperty.PropertyName);
+        }
+        else if (Local.IsGetLocal(resultPusher.OP))
+        {
+            return GetOutgoingStructure(messageClass, getArrayCode, (Local)resultPusher);
+        }
+        return null;
+    }
+    private string? GetOutgoingStructure(ASClass @class, ASMultiname? propertyName)
+    {
+        ASMethod constructor = @class.Instance.Constructor;
+        if (constructor.Body.Exceptions.Count > 0) return null;
+
+        ASCode code = constructor.Body.ParseCode();
+        if (code.JumpExits.Count > 0 || code.SwitchExits.Count > 0) return null;
+
+        string? structure = null;
+        for (int i = 0; i < code.Count; i++)
+        {
+            ASInstruction instruction = code[i];
+            if (instruction.OP == OPCode.NewArray)
+            {
+                var newArray = (NewArrayIns)instruction;
+                if (newArray.ArgCount > 0)
+                {
+                    var structurePieces = new char[newArray.ArgCount];
+                    for (int j = i - 1, length = newArray.ArgCount; j >= 0; j--)
+                    {
+                        ASInstruction previous = code[j];
+                        if (Local.IsGetLocal(previous.OP) && previous.OP != OPCode.GetLocal_0)
+                        {
+                            var local = (Local)previous;
+                            ASParameter parameter = constructor.Parameters[local.Register - 1];
+
+                            if (!TryGetStructurePiece(true, parameter.Type, null, out char piece)) return null;
+                            structurePieces[--length] = piece;
+                        }
+                        if (length == 0)
+                        {
+                            structure += new string(structurePieces);
+                            break;
+                        }
+                    }
+                }
+            }
+            else if (instruction.OP == OPCode.ConstructSuper)
+            {
+                var constructSuper = (ConstructSuperIns)instruction;
+                if (constructSuper.ArgCount > 0)
+                {
+                    ASClass superClass = @class.ABC.GetClass(@class.Instance.Super);
+                    structure += GetOutgoingStructure(superClass, propertyName);
+                }
+            }
+            if (instruction.OP != OPCode.GetProperty) continue;
+
+            var getProperty = (GetPropertyIns)instruction;
+            if (getProperty.PropertyName != propertyName) continue;
+
+            ASInstruction next = code[++i];
+            ASClass? classToCheck = @class;
+            if (Local.IsGetLocal(next.OP))
+            {
+                if (next.OP == OPCode.GetLocal_0) continue;
+
+                var local = (Local)next;
+                ASParameter parameter = constructor.Parameters[local.Register - 1];
+
+                if (!TryGetStructurePiece(true, parameter.Type, null, out char piece)) return null;
+                structure += piece;
+            }
+            else if (Primitive.IsValid(next.OP) && code[i + 1].OP == OPCode.CallPropVoid) // Could it be 'push(pop())'?
+            {
+                switch (next.OP)
+                {
+                    case OPCode.PushByte: structure += 'B'; break;
+                    default: break;
+                }
+            }
+            else
+            {
+                if (next.OP == OPCode.FindPropStrict)
+                {
+                    classToCheck = null;
+                }
+                else if (next.OP == OPCode.GetLex)
+                {
+                    var getLex = (GetLexIns)next;
+                    classToCheck = classToCheck.ABC.GetClass(getLex.TypeName);
+                }
+                do
+                {
+                    next = code[++i];
+                    propertyName = null;
+                    if (next.OP == OPCode.GetProperty)
+                    {
+                        getProperty = (GetPropertyIns)next;
+                        propertyName = getProperty.PropertyName;
+                    }
+                    else if (next.OP == OPCode.CallProperty)
+                    {
+                        var callProperty = (CallPropertyIns)next;
+                        propertyName = callProperty.PropertyName;
+                    }
+                }
+                while (next.OP is not OPCode.GetProperty and not OPCode.CallProperty);
+
+                if (!TryGetStructurePiece(true, propertyName, classToCheck, out char piece)) return null;
+                structure += piece;
+            }
+        }
+        return structure;
     }
     #endregion
 }

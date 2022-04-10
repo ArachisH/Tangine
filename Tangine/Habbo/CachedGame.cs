@@ -15,20 +15,25 @@ public sealed class CachedGame : HGame
     {
         if (!File.Exists(cachedGameJsonPath))
         {
-            throw new FileNotFoundException(null, cachedGameJsonPath);
+            ThrowHelper.ThrowFileNotFoundException("Failed to locate the specified json file.", cachedGameJsonPath);
         }
 
         var cachedGameNode = JsonNode.Parse(File.ReadAllBytes(cachedGameJsonPath));
-        Path = (string)cachedGameNode["path"];
-        IsUnity = (bool)cachedGameNode["isUnity"];
-        IsAir = (bool)cachedGameNode["isAir"];
+        if (cachedGameNode == null)
+        {
+            ThrowHelper.ThrowArgumentException($"Failed to parse the json file located at: {cachedGameJsonPath}", nameof(cachedGameJsonPath));
+        }
 
-        Revision = (string)cachedGameNode["revision"];
-        IsPostShuffle = (bool)cachedGameNode["isPostShuffle"];
-        HasPingInstructions = (bool)cachedGameNode["hasPingInstructions"];
+        Path = GetNonNullableValue<string>(cachedGameNode, "path");
+        IsUnity = GetNonNullableValue<bool>(cachedGameNode, "isUnity");
+        IsAir = GetNonNullableValue<bool>(cachedGameNode, "isAir");
+        Revision = GetNonNullableValue<string>(cachedGameNode, "revision");
 
-        JsonArray outgoingNode = cachedGameNode["outgoing"].AsArray();
-        JsonArray incomingNode = cachedGameNode["incoming"].AsArray();
+        IsPostShuffle = GetNonNullableValue<bool>(cachedGameNode, "isPostShuffle");
+        HasPingInstructions = GetNonNullableValue<bool>(cachedGameNode, "hasPingInstructions");
+
+        var outgoingNode = GetNonNullableValue<JsonArray>(cachedGameNode, "outgoing");
+        var incomingNode = GetNonNullableValue<JsonArray>(cachedGameNode, "incoming");
         _inMessagesByName = new Dictionary<string, HMessage>(incomingNode.Count);
         _outMessagesByName = new Dictionary<string, HMessage>(outgoingNode.Count);
         _messagesByHash = new Dictionary<uint, HMessage>(outgoingNode.Count + incomingNode.Count);
@@ -44,14 +49,14 @@ public sealed class CachedGame : HGame
         {
             var message = new HMessage
             {
-                Name = (string)identifiers[i]["name"],
-                Id = (short)identifiers[i]["id"],
-                Hash = (uint)identifiers[i]["hash"],
-                Structure = (string)identifiers[i]["structure"],
+                Name = GetNonNullableValue<string>(identifiers[i], "name"),
+                Id = GetNonNullableValue<short>(identifiers[i], "id"),
+                Hash = GetNonNullableValue<uint>(identifiers[i], "hash"),
+                Structure = GetNonNullableValue<string>(identifiers[i], "structure"),
                 IsOutgoing = isOutgoing,
-                TypeName = (string)identifiers[i]["typeName"],
-                ParserTypeName = (string)identifiers[i]["parserTypeName"],
-                References = (int)identifiers[i]["references"]
+                TypeName = GetNonNullableValue<string>(identifiers[i], "typeName"),
+                ParserTypeName = GetNonNullableValue<string>(identifiers[i], "parserTypeName"),
+                References = GetNonNullableValue<int>(identifiers[i], "references")
             };
             messagesByName.Add(message.Name, message);
             _messagesByHash.Add(message.Hash, message);
@@ -60,7 +65,7 @@ public sealed class CachedGame : HGame
 
     protected override bool? TryPatch(GamePatches patch) => throw new NotSupportedException();
 
-    public override void GenerateMessageHashes() => throw new NotSupportedException();
+    public override void GenerateMessageHashes() => ThrowHelper.ThrowNotSupportedException();
     public override bool TryResolveMessage(string name, uint hash, bool isOutgoing, out HMessage message)
     {
         if (!_messagesByHash.TryGetValue(hash, out message))
@@ -71,8 +76,8 @@ public sealed class CachedGame : HGame
     }
 
     public override byte[] ToArray() => throw new NotSupportedException();
-    public override void Disassemble() => throw new NotSupportedException();
-    public override void Assemble(string path) => throw new NotSupportedException();
+    public override void Disassemble() => ThrowHelper.ThrowNotSupportedException();
+    public override void Assemble(string path) => ThrowHelper.ThrowNotSupportedException();
 
     protected override void Dispose(bool disposing)
     {
@@ -87,5 +92,21 @@ public sealed class CachedGame : HGame
             _outMessagesByName.Clear();
             _outMessagesByName.EnsureCapacity(0);
         }
+    }
+
+    private static T GetNonNullableValue<T>(JsonNode? parentNode, string propertyName)
+    {
+        if (parentNode == null)
+        {
+            ThrowHelper.ThrowNullReferenceException("The parent node can not be null.");
+        }
+
+        JsonNode? childNode = parentNode[propertyName];
+        if (childNode == null)
+        {
+            ThrowHelper.ThrowNullReferenceException("The child node was not found in the parent node.");
+        }
+
+        return childNode.GetValue<T>();
     }
 }

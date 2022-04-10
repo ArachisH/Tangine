@@ -13,7 +13,7 @@ namespace Tangine.Habbo.Unity;
 
 public class UnityGame : HGame
 {
-    private WASMModule _wasm;
+    private WASMModule? _wasm;
 
     public override bool IsUnity => true;
     public override bool IsPostShuffle => true;
@@ -22,10 +22,12 @@ public class UnityGame : HGame
     public UnityGame(string path, string revision, ReadOnlyMemory<byte> region = default)
         : base(GamePatches.InjectKeyShouter)
     {
-        if (!region.IsEmpty)
+        if (region.IsEmpty)
         {
-            _wasm = new WASMModule(region);
+            ThrowHelper.ThrowArgumentException("The WebAssembly module can not be parsed with the specified buffer because it is empty.", nameof(region));
         }
+
+        _wasm = new WASMModule(region);
 
         Path = path;
         Revision = revision;
@@ -40,6 +42,11 @@ public class UnityGame : HGame
 
     private bool InjectKeyShouter()
     {
+        if (IsDisposed || _wasm == null)
+        {
+            ThrowHelper.ThrowObjectDisposedException("The underlying WebAssembly module has already been disposed.");
+        }
+
         for (int i = 0; i < _wasm.CodeSec.Count; i++)
         {
             // Begin searching for the ChaChaEngine.SetKey method.
@@ -88,11 +95,11 @@ public class UnityGame : HGame
 
                 expression.InsertRange(0, new WASMInstruction[]
                 {
-                        new ConstantI32Ins(0),  // WebSocket Instance Id
-                        new GetLocalIns(1),     // Key Pointer
-                        new ConstantI32Ins(48), // Key Length
-                        new CallIns(126),       // _WebSocketSend
-                        new DropIns(),
+                    new ConstantI32Ins(0),  // WebSocket Instance Id
+                    new GetLocalIns(1),     // Key Pointer
+                    new ConstantI32Ins(48), // Key Length
+                    new CallIns(126),       // _WebSocketSend
+                    new DropIns(),
                 });
                 codeSubSec.Bytecode = WASMInstruction.ToArray(expression);
                 return true;
@@ -102,15 +109,26 @@ public class UnityGame : HGame
     }
     #endregion
 
-    public override void GenerateMessageHashes() => throw new NotSupportedException();
+    public override void GenerateMessageHashes() => ThrowHelper.ThrowNotSupportedException();
     public override bool TryResolveMessage(string name, uint hash, bool isOutgoing, out HMessage message) => throw new NotSupportedException();
 
-    public override byte[] ToArray() => _wasm.ToArray();
-    public override void Disassemble() => _wasm.Disassemble();
-    public override void Assemble(string path) => throw new NotSupportedException();
-
-    protected override void Dispose(bool disposing)
+    public override byte[] ToArray()
     {
-        _wasm = null;
+        if (IsDisposed || _wasm == null)
+        {
+            ThrowHelper.ThrowObjectDisposedException("The underlying WebAssembly module has already been disposed.");
+        }
+        return _wasm.ToArray();
     }
+    public override void Disassemble()
+    {
+        if (IsDisposed || _wasm == null)
+        {
+            ThrowHelper.ThrowObjectDisposedException("The underlying WebAssembly module has already been disposed.");
+        }
+        _wasm.Disassemble();
+    }
+    public override void Assemble(string path) => ThrowHelper.ThrowNotSupportedException();
+
+    protected override void Dispose(bool disposing) => _wasm = null;
 }

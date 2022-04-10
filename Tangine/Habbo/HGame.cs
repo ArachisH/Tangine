@@ -7,7 +7,6 @@ namespace Tangine.Habbo;
 
 public abstract class HGame : IGame, IDisposable
 {
-    private bool _isDisposed;
     private readonly GamePatches _defaultPatches;
 
     #region Reserved Names
@@ -24,17 +23,19 @@ public abstract class HGame : IGame, IDisposable
         };
     #endregion
 
-    public virtual string Path { get; init; }
+    public virtual string? Path { get; init; }
     public virtual bool IsUnity { get; init; }
     public virtual bool IsAir { get; protected set; }
 
-    public virtual string Revision { get; protected set; }
+    public virtual string? Revision { get; protected set; }
     public virtual bool IsPostShuffle { get; protected set; }
     public virtual bool HasPingInstructions { get; protected set; }
 
     public int KeyShouterId { get; init; }
-    public IPEndPoint InjectableEndPoint { get; init; }
+    public IPEndPoint? InjectableEndPoint { get; init; }
     public int EndPointShouterId => IsPostShuffle ? 4000 : 206;
+
+    protected bool IsDisposed { get; private set; }
 
     public HGame(GamePatches defaultPatches) => _defaultPatches = defaultPatches;
 
@@ -48,7 +49,7 @@ public abstract class HGame : IGame, IDisposable
             bool? result = TryPatch(patch);
             if (result == null)
             {
-                throw new NotSupportedException("Patching method not yet supported: " + patch);
+                ThrowHelper.ThrowNotSupportedException($"Patch not supported: {patch}");
             }
 
             // It's a nullable, so that's why I'm not using the '!' operator...
@@ -92,9 +93,9 @@ public abstract class HGame : IGame, IDisposable
 
     protected static bool IsValidIdentifier(string value)
     {
-        if (string.IsNullOrWhiteSpace(value)) return false;
-        if (value.StartsWith("_-")) return false;
-        return !_reservedNames.Contains(value.ToLower());
+        return !string.IsNullOrWhiteSpace(value) &&
+            !value.StartsWith("_-") &&
+            !_reservedNames.Contains(value.ToLower());
     }
     protected static void SaveAs(string propertyName, Utf8JsonWriter cachedGameJson, Identifiers identifiers)
     {
@@ -116,10 +117,10 @@ public abstract class HGame : IGame, IDisposable
 
     public void Dispose()
     {
-        if (!_isDisposed)
+        if (!IsDisposed)
         {
             Dispose(true);
-            _isDisposed = true;
+            IsDisposed = true;
 
             GC.Collect();
             GC.SuppressFinalize(this);
