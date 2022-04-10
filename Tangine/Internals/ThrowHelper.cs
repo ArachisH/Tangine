@@ -1,6 +1,6 @@
 ﻿using System.Diagnostics.CodeAnalysis;
 
-namespace Tangine.Network;
+namespace Tangine;
 
 internal static class ThrowHelper
 {
