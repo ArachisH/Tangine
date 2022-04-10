@@ -9,11 +9,12 @@ using Sulakore.Network.Formats;
 
 namespace Tangine.Network;
 
-public class HConnection : IHConnection
+public sealed class HConnection : IHConnection
 {
     private static readonly byte[] _crossDomainPolicyRequestBytes, _crossDomainPolicyResponseBytes;
 
     private readonly object _disconnectLock;
+    private readonly Action _cancelInterception;
 
     private bool _isIntercepting;
     private int _inSteps, _outSteps;
@@ -21,8 +22,8 @@ public class HConnection : IHConnection
     /// <summary>
     /// Occurs when the connection between the client, and server have been intercepted.
     /// </summary>
-    public event EventHandler<ConnectedEventArgs> Connected;
-    protected virtual void OnConnected(ConnectedEventArgs e)
+    public event EventHandler<ConnectedEventArgs>? Connected;
+    private void OnConnected(ConnectedEventArgs e)
     {
         Connected?.Invoke(this, e);
     }
@@ -30,8 +31,8 @@ public class HConnection : IHConnection
     /// <summary>
     /// Occurs when either the game client, or server have disconnected.
     /// </summary>
-    public event EventHandler Disconnected;
-    protected virtual void OnDisconnected(EventArgs e)
+    public event EventHandler? Disconnected;
+    private void OnDisconnected(EventArgs e)
     {
         Disconnected?.Invoke(this, e);
     }
@@ -39,8 +40,8 @@ public class HConnection : IHConnection
     /// <summary>
     /// Occurs when the client's outgoing data has been intercepted.
     /// </summary>
-    public event EventHandler<DataInterceptedEventArgs> DataOutgoing;
-    protected virtual void OnDataOutgoing(DataInterceptedEventArgs e)
+    public event EventHandler<DataInterceptedEventArgs>? DataOutgoing;
+    private void OnDataOutgoing(DataInterceptedEventArgs e)
     {
         DataOutgoing?.Invoke(this, e);
     }
@@ -48,8 +49,8 @@ public class HConnection : IHConnection
     /// <summary>
     /// Occrus when the server's incoming data has been intercepted.
     /// </summary>
-    public event EventHandler<DataInterceptedEventArgs> DataIncoming;
-    protected virtual void OnDataIncoming(DataInterceptedEventArgs e)
+    public event EventHandler<DataInterceptedEventArgs>? DataIncoming;
+    private void OnDataIncoming(DataInterceptedEventArgs e)
     {
         DataIncoming?.Invoke(this, e);
     }
@@ -58,12 +59,12 @@ public class HConnection : IHConnection
     public int ListenPort { get; set; } = 9567;
     public bool IsConnected { get; private set; }
 
-    public IHFormat SendFormat { get; }
-    public IHFormat ReceiveFormat { get; }
+    public IHFormat? SendFormat { get; }
+    public IHFormat? ReceiveFormat { get; }
 
-    public HNode Local { get; private set; }
-    public HNode Remote { get; private set; }
-    public X509Certificate Certificate { get; set; }
+    public HNode? Local { get; private set; }
+    public HNode? Remote { get; private set; }
+    public X509Certificate? Certificate { get; set; }
 
     static HConnection()
     {
@@ -73,26 +74,28 @@ public class HConnection : IHConnection
     public HConnection()
     {
         _disconnectLock = new object();
+        _cancelInterception = CancelInterception;
     }
 
-    public Task InterceptAsync(IPEndPoint endpoint)
+    public async Task InterceptAsync(IPEndPoint endpoint, CancellationToken cancellationToken = default)
     {
-        return InterceptAsync(new HotelEndPoint(endpoint));
+        await InterceptAsync(new HotelEndPoint(endpoint), cancellationToken).ConfigureAwait(false);
     }
-    public Task InterceptAsync(string host, int port)
+    public async Task InterceptAsync(string host, int port, CancellationToken cancellationToken = default)
     {
-        return InterceptAsync(HotelEndPoint.Parse(host, port));
+        await InterceptAsync(HotelEndPoint.Parse(host, port), cancellationToken).ConfigureAwait(false);
     }
-    public async Task InterceptAsync(HotelEndPoint endpoint)
+    public async Task InterceptAsync(HotelEndPoint endpoint, CancellationToken cancellationToken = default)
     {
-        // TODO: Implement the usage of a CancellationToken instead of constantly checking the _isIntercepting field.
         _isIntercepting = true;
+        cancellationToken.Register(_cancelInterception);
+
         int interceptCount = 0;
         while (!IsConnected && _isIntercepting)
         {
             try
             {
-                Local = await HNode.AcceptAsync(ListenPort).ConfigureAwait(false);
+                Local = await HNode.AcceptAsync(ListenPort, cancellationToken).ConfigureAwait(false);
                 if (!_isIntercepting) break;
 
                 if (++interceptCount == SocketSkip)
@@ -101,7 +104,7 @@ public class HConnection : IHConnection
                     continue;
                 }
 
-                bool wasDetermined = await Local.DetermineFormatsAsync().ConfigureAwait(false);
+                bool wasDetermined = await Local.DetermineFormatsAsync(cancellationToken).ConfigureAwait(false);
                 if (!_isIntercepting) break;
 
                 if (Local.IsWebSocket)
@@ -111,13 +114,15 @@ public class HConnection : IHConnection
                 else if (!wasDetermined)
                 {
                     using IMemoryOwner<byte> receiveBufferOwner = MemoryPool<byte>.Shared.Rent(512);
-                    int received = await Local.ReceiveAsync(receiveBufferOwner.Memory).ConfigureAwait(false);
+                    int received = await Local.ReceiveAsync(receiveBufferOwner.Memory, cancellationToken).ConfigureAwait(false);
                     if (!_isIntercepting) break;
 
-                    _ = receiveBufferOwner.Memory[..received].Span.SequenceEqual(_crossDomainPolicyRequestBytes)
-                        ? await Local.SendAsync(_crossDomainPolicyResponseBytes).ConfigureAwait(false)
-                        : throw new Exception("Expected cross-domain policy request.");
+                    if (!receiveBufferOwner.Memory.Span.Slice(0, received).SequenceEqual(_crossDomainPolicyRequestBytes))
+                    {
+                        ThrowHelper.ThrowNotSupportedException("Expected cross-domain policy request.");
+                    }
 
+                    await Local.SendAsync(_crossDomainPolicyResponseBytes, cancellationToken).ConfigureAwait(false);
                     continue;
                 }
 
@@ -133,7 +138,7 @@ public class HConnection : IHConnection
                 if (args.IsFakingPolicyRequest)
                 {
                     using var tempRemote = await HNode.ConnectAsync(endpoint).ConfigureAwait(false);
-                    await tempRemote.SendAsync(_crossDomainPolicyRequestBytes).ConfigureAwait(false);
+                    await tempRemote.SendAsync(_crossDomainPolicyRequestBytes, cancellationToken).ConfigureAwait(false);
                 }
 
                 Remote = await HNode.ConnectAsync(endpoint).ConfigureAwait(false);
@@ -157,16 +162,34 @@ public class HConnection : IHConnection
         _isIntercepting = false;
     }
 
-    public Task SendToClientAsync(HPacket packet, CancellationToken cancellationToken = default) => Local.SendPacketAsync(packet, cancellationToken);
-    public Task SendToServerAsync(HPacket packet, CancellationToken cancellationToken = default) => Remote.SendPacketAsync(packet, cancellationToken);
-
-    private async Task InterceptOutgoingAsync(DataInterceptedEventArgs continuedFrom = null)
+    public async Task SendToClientAsync(HPacket packet, CancellationToken cancellationToken = default)
     {
+        if (Local == null)
+        {
+            ThrowHelper.ThrowNullReferenceException();
+        }
+        await Local.SendPacketAsync(packet, cancellationToken).ConfigureAwait(false);
+    }
+    public async Task SendToServerAsync(HPacket packet, CancellationToken cancellationToken = default)
+    {
+        if (Remote == null)
+        {
+            ThrowHelper.ThrowNullReferenceException();
+        }
+        await Remote.SendPacketAsync(packet, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task InterceptOutgoingAsync()
+    {
+        if (Local == null)
+        {
+            ThrowHelper.ThrowNullReferenceException();
+        }
+
         HPacket packet = await Local.ReceivePacketAsync(SendFormat).ConfigureAwait(false);
         if (packet == null)
         {
-            Disconnect();
-            return;
+            ThrowHelper.ThrowNullReferenceException();
         }
 
         var args = new DataInterceptedEventArgs(packet, ++_outSteps, true, InterceptOutgoingAsync, ServerRelayer);
@@ -185,13 +208,17 @@ public class HConnection : IHConnection
             args.Continue();
         }
     }
-    private async Task InterceptIncomingAsync(DataInterceptedEventArgs continuedFrom = null)
+    private async Task InterceptIncomingAsync()
     {
+        if (Remote == null)
+        {
+            ThrowHelper.ThrowNullReferenceException();
+        }
+
         HPacket packet = await Remote.ReceivePacketAsync(ReceiveFormat).ConfigureAwait(false);
         if (packet == null)
         {
-            Disconnect();
-            return;
+            ThrowHelper.ThrowNullReferenceException();
         }
 
         var args = new DataInterceptedEventArgs(packet, ++_inSteps, false, InterceptIncomingAsync, ClientRelayer);
@@ -210,42 +237,34 @@ public class HConnection : IHConnection
     private Task ClientRelayer(DataInterceptedEventArgs relayedFrom) => SendToClientAsync(relayedFrom.Packet);
     private Task ServerRelayer(DataInterceptedEventArgs relayedFrom) => SendToServerAsync(relayedFrom.Packet);
 
-    public void Disconnect()
-    {
-        if (Monitor.TryEnter(_disconnectLock))
-        {
-            try
-            {
-                _isIntercepting = false;
-                if (Local != null)
-                {
-                    Local.Dispose();
-                    Local = null;
-                }
-                if (Remote != null)
-                {
-                    Remote.Dispose();
-                    Remote = null;
-                }
-                if (IsConnected)
-                {
-                    IsConnected = false;
-                    OnDisconnected(EventArgs.Empty);
-                }
-            }
-            finally { Monitor.Exit(_disconnectLock); }
-        }
-    }
+    private void CancelInterception() => _isIntercepting = false;
 
     public void Dispose()
     {
-        Dispose(true);
+        Disconnect();
     }
-    protected virtual void Dispose(bool disposing)
+    public void Disconnect()
     {
-        if (disposing)
+        if (!Monitor.TryEnter(_disconnectLock)) return;
+        try
         {
-            Disconnect();
+            _isIntercepting = false;
+            if (Local != null)
+            {
+                Local.Dispose();
+                Local = null;
+            }
+            if (Remote != null)
+            {
+                Remote.Dispose();
+                Remote = null;
+            }
+            if (IsConnected)
+            {
+                IsConnected = false;
+                OnDisconnected(EventArgs.Empty);
+            }
         }
+        finally { Monitor.Exit(_disconnectLock); }
     }
 }
