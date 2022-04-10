@@ -6,4 +6,10 @@
 		<Nullable>enable</Nullable>
 	</PropertyGroup>
 
+	<ItemGroup>
+		<ProjectReference Include="..\..\Wazzy\Wazzy\Wazzy.csproj" />
+		<ProjectReference Include="..\..\Flazzy\Flazzy\Flazzy.csproj" />
+		<ProjectReference Include="..\..\Sulakore [develop]\Sulakore\Sulakore.csproj" />
+	</ItemGroup>
+
 </Project>
