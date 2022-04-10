@@ -1,7 +1,7 @@
 ﻿using Sulakore.Habbo;
 using Sulakore.Network;
 
-namespace Tangine.Extension;
+namespace Tangine.API;
 
 public interface IInstaller
 {

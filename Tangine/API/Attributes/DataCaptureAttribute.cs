@@ -4,7 +4,7 @@ using Sulakore.Habbo;
 using Sulakore.Network;
 using Sulakore.Network.Buffers;
 
-namespace Tangine.Extension;
+namespace Tangine.API;
 
 [AttributeUsage(AttributeTargets.Method, AllowMultiple = true)]
 public sealed class DataCaptureAttribute : Attribute, IEquatable<DataCaptureAttribute>
@@ -13,8 +13,8 @@ public sealed class DataCaptureAttribute : Attribute, IEquatable<DataCaptureAttr
     public uint Hash { get; init; }
     public bool IsOutgoing { get; init; }
 
-    internal object Target { get; set; }
-    internal MethodInfo Method { get; set; }
+    internal object? Target { get; set; }
+    internal MethodInfo? Method { get; set; }
 
     public static bool operator !=(DataCaptureAttribute left, DataCaptureAttribute right) => !(left == right);
     public static bool operator ==(DataCaptureAttribute left, DataCaptureAttribute right) => EqualityComparer<DataCaptureAttribute>.Default.Equals(left, right);
@@ -32,8 +32,8 @@ public sealed class DataCaptureAttribute : Attribute, IEquatable<DataCaptureAttr
 
     internal void Invoke(DataInterceptedEventArgs args)
     {
-        object[] parameters = CreateValues(args);
-        object result = Method?.Invoke(Target, parameters);
+        object?[] parameters = CreateValues(args);
+        object? result = Method?.Invoke(Target, parameters);
         switch (result)
         {
             case bool isBlocked:
@@ -43,19 +43,27 @@ public sealed class DataCaptureAttribute : Attribute, IEquatable<DataCaptureAttr
             }
         }
     }
-    private object[] CreateValues(DataInterceptedEventArgs args)
+    private object?[] CreateValues(DataInterceptedEventArgs args)
     {
+        if (Method == null)
+        {
+            return Array.Empty<object>();
+        }
+
         ParameterInfo[] parameters = Method.GetParameters();
-        var values = new object[parameters.Length];
+        var values = new object?[parameters.Length];
 
         HPacketReader packetIn = args.Packet.AsReader();
         for (int i = 0; i < values.Length; i++)
         {
             ParameterInfo parameter = parameters[i];
+            if (string.IsNullOrWhiteSpace(parameter.Name)) continue;
+
             if (parameter.Name.Equals("id", StringComparison.OrdinalIgnoreCase))
             {
                 values[i] = args.Packet.Id;
             }
+
             values[i] = Type.GetTypeCode(parameter.ParameterType) switch
             {
                 TypeCode.Byte => packetIn.Read<byte>(),
@@ -70,7 +78,7 @@ public sealed class DataCaptureAttribute : Attribute, IEquatable<DataCaptureAttr
         }
         return values;
     }
-    private object CreateUnknownValueType(ref HPacketReader packet, DataInterceptedEventArgs args, Type parameterType) => parameterType.Name switch
+    private object? CreateUnknownValueType(ref HPacketReader packet, DataInterceptedEventArgs args, Type parameterType) => parameterType.Name switch
     {
         nameof(DataInterceptedEventArgs) => args,
         nameof(ReadOnlyMemory<byte>) => args.Packet,
@@ -83,14 +91,14 @@ public sealed class DataCaptureAttribute : Attribute, IEquatable<DataCaptureAttr
     {
         return HashCode.Combine(Id, Hash, IsOutgoing, Method);
     }
-    public override bool Equals(object obj)
+    public override bool Equals(object? obj)
     {
         return Equals(obj as DataCaptureAttribute);
 
     }
-    public bool Equals(DataCaptureAttribute other)
+    public bool Equals(DataCaptureAttribute? other)
     {
-        return other != null &&
+        return other is not null &&
             Id == other.Id &&
             Hash == other.Hash &&
             IsOutgoing == other.IsOutgoing &&

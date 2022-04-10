@@ -1,6 +1,6 @@
 ﻿using Sulakore.Network;
 
-namespace Tangine.Extension;
+namespace Tangine.API;
 
 public interface IExtension : IDisposable
 {
