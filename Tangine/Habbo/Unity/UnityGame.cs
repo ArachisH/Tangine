@@ -15,7 +15,6 @@ public class UnityGame : HGame
 {
     private WASMModule? _wasm;
 
-    public override bool IsUnity => true;
     public override bool IsPostShuffle => true;
     public override bool HasPingInstructions => false;
 
@@ -31,6 +30,7 @@ public class UnityGame : HGame
 
         Path = path;
         Revision = revision;
+        Kind = GameKind.Unity;
     }
 
     #region Patching Methods

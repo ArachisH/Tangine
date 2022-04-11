@@ -9,23 +9,8 @@ public abstract class HGame : IGame, IDisposable
 {
     private readonly GamePatches _defaultPatches;
 
-    #region Reserved Names
-    private static readonly string[] _reservedNames = new[]
-    {
-            "break", "case", "catch", "class", "continue",
-            "default", "do", "dynamic", "each", "else",
-            "extends", "false", "final", "finally", "for",
-            "function", "get", "if", "implements", "import",
-            "in", "include", "native", "null", "override",
-            "package", "return", "set", "static", "super",
-            "switch", "throw", "true", "try", "use",
-            "var", "while", "with"
-        };
-    #endregion
-
     public virtual string? Path { get; init; }
-    public virtual bool IsUnity { get; init; }
-    public virtual bool IsAir { get; protected set; }
+    public virtual GameKind Kind { get; protected set; }
 
     public virtual string? Revision { get; protected set; }
     public virtual bool IsPostShuffle { get; protected set; }
@@ -73,8 +58,7 @@ public abstract class HGame : IGame, IDisposable
 
         cachedGameJson.WriteStartObject();
         cachedGameJson.WriteString("path", Path);
-        cachedGameJson.WriteBoolean("isUnity", IsUnity);
-        cachedGameJson.WriteBoolean("isAir", IsAir);
+        cachedGameJson.WriteString("kind", Kind.ToString());
 
         cachedGameJson.WriteString("revision", Revision);
         cachedGameJson.WriteBoolean("isPostShuffle", IsPostShuffle);
@@ -91,12 +75,6 @@ public abstract class HGame : IGame, IDisposable
     public abstract void Disassemble();
     public abstract void Assemble(string path);
 
-    protected static bool IsValidIdentifier(string value)
-    {
-        return !string.IsNullOrWhiteSpace(value) &&
-            !value.StartsWith("_-") &&
-            !_reservedNames.Contains(value.ToLower());
-    }
     protected static void SaveAs(string propertyName, Utf8JsonWriter cachedGameJson, Identifiers identifiers)
     {
         cachedGameJson.WriteStartArray(propertyName);

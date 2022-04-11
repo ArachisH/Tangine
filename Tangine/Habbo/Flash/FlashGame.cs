@@ -14,6 +14,20 @@ namespace Tangine.Habbo.Flash;
 
 public class FlashGame : HGame
 {
+    #region Reserved Flash/AS3 Keywords
+    private static readonly string[] _reservedKeywords = new[]
+    {
+            "break", "case", "catch", "class", "continue",
+            "default", "do", "dynamic", "each", "else",
+            "extends", "false", "final", "finally", "for",
+            "function", "get", "if", "implements", "import",
+            "in", "include", "native", "null", "override",
+            "package", "return", "set", "static", "super",
+            "switch", "throw", "true", "try", "use",
+            "var", "while", "with"
+        };
+    #endregion
+
     private readonly ShockwaveFlash _flash;
     private readonly Dictionary<DoABCTag, ABCFile> _abcFileTags;
     private readonly Dictionary<uint, FlashMessage> _flashMessagesByHash;
@@ -40,8 +54,8 @@ public class FlashGame : HGame
         _flashMessagesByClassName = new Dictionary<string, FlashMessage>(1000);
 
         Path = path;
-        IsUnity = false;
         IsPostShuffle = true;
+        Kind = GameKind.Flash;
     }
 
     #region Patching Methods
@@ -58,7 +72,7 @@ public class FlashGame : HGame
 
     private bool DisableHostChecks()
     {
-        if (IsAir) return true;
+        if (Kind == GameKind.FlashAir) return true;
 
         ASMethod localHostCheckMethod = _abcFileTags.Values.First().Classes[0].GetMethod(null, "Boolean", 1);
         if (localHostCheckMethod == null) return false;
@@ -818,9 +832,10 @@ public class FlashGame : HGame
             PrepareHabboCommunicationDemo(abc);
             PrepareHabboCommunicationManager(abc);
         }
-        if (!string.IsNullOrWhiteSpace(Revision))
+
+        if (!string.IsNullOrWhiteSpace(Revision) && !Revision.StartsWith("PRODUCTION"))
         {
-            IsAir = !Revision.StartsWith("PRODUCTION");
+            Kind = GameKind.FlashAir;
         }
     }
     public override void Assemble(string path)
@@ -855,6 +870,13 @@ public class FlashGame : HGame
         _scSendMethod = _scSendUnencryptedMethod = null;
         _hcmNextPortMethod = _hcmUpdateHostParametersMethod = null;
         _socketConnectionInstance = _habboCommunicationDemoInstance = _habboCommunicationManagerInstance = null;
+    }
+
+    protected static bool IsValidIdentifier(string value)
+    {
+        return !string.IsNullOrWhiteSpace(value) &&
+            !value.StartsWith("_-") &&
+            !_reservedKeywords.Contains(value.ToLower());
     }
 
     #region Hashing/Message Linking

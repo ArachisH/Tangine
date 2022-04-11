@@ -25,8 +25,7 @@ public sealed class CachedGame : HGame
         }
 
         Path = GetNonNullableValue<string>(cachedGameNode, "path");
-        IsUnity = GetNonNullableValue<bool>(cachedGameNode, "isUnity");
-        IsAir = GetNonNullableValue<bool>(cachedGameNode, "isAir");
+        Kind = GetNonNullableValue<GameKind>(cachedGameNode, "kind");
         Revision = GetNonNullableValue<string>(cachedGameNode, "revision");
 
         IsPostShuffle = GetNonNullableValue<bool>(cachedGameNode, "isPostShuffle");
