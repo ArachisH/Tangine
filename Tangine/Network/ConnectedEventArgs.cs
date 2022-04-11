@@ -1,8 +1,10 @@
-﻿using Sulakore.Network;
+﻿using System.ComponentModel;
+
+using Sulakore.Network;
 
 namespace Tangine.Network;
 
-public sealed class ConnectedEventArgs : EventArgs
+public sealed class ConnectedEventArgs : CancelEventArgs
 {
     public IHConnection Connection { get; }
     public HotelEndPoint HotelServer { get; set; }
